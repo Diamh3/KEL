@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const KEY = process.env.GEMINI_API_KEY;
 const PORT = process.env.PORT || 3000;
-const MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+const MODELS = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.5-flash-lite'];
 const TRIES_PER_MODEL = 3;
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -57,6 +57,7 @@ async function askKel(prompt) {
         lastError = err;
         const busy = err.status === 503 || err.status === 429 || err.status === 500;
         console.log(`[${model}] try ${attempt} failed: ${err.message}`);
+        if (err.status === 404) break;
         if (!busy) break;
         await sleep(1000 * attempt * attempt);
       }
