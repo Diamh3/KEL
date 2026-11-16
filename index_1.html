@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icon-192.png">
+  <title>Kel</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; height: 100vh; display: flex; flex-direction: column;
+      align-items: center; gap: 14px; padding: 16px;
+      background: #0b1220; color: #e8eefc; font-family: system-ui, sans-serif;
+    }
+    #logo { width: 110px; height: 110px; border-radius: 24px; flex: none; }
+    #listen {
+      width: 120px; height: 120px; border-radius: 50%; border: none; flex: none;
+      background: #2563eb; color: white; font-size: 16px; cursor: pointer;
+    }
+    #listen.on { background: #dc2626; }
+    #status { min-height: 22px; opacity: 0.8; flex: none; }
+    #log { width: min(94vw, 600px); flex: 1; overflow-y: auto; }
+    .you { color: #93c5fd; margin: 8px 0; }
+    .kel { color: #e8eefc; margin: 8px 0; }
+    #bar { width: min(94vw, 600px); display: flex; gap: 8px; flex: none; }
+    #text {
+      flex: 1; padding: 12px; border-radius: 10px; border: 1px solid #334155;
+      background: #111a2e; color: #e8eefc; font-size: 16px;
+    }
+    #send {
+      padding: 0 18px; border: none; border-radius: 10px;
+      background: #2563eb; color: white; font-size: 16px; cursor: pointer;
+    }
+    #voices {
+      width: min(94vw, 600px); flex: none; padding: 8px; border-radius: 8px;
+      background: #111a2e; color: #e8eefc; border: 1px solid #334155;
+    }
+  </style>
+</head>
+<body>
+  <img id="logo" src="/icon-512.png" alt="Kel">
+  <button id="listen">Tap to start</button>
+  <div id="status">Ready</div>
+  <div id="log"></div>
+  <form id="bar">
+    <input id="text" type="text" placeholder="Type to Kel" autocomplete="off">
+    <button id="send" type="submit">Send</button>
+  </form>
+  <select id="voices"></select>
+
+  <script>
+    const btn = document.getElementById('listen');
+    const statusEl = document.getElementById('status');
+    const log = document.getElementById('log');
+    const form = document.getElementById('bar');
+    const input = document.getElementById('text');
+    const voiceSel = document.getElementById('voices');
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    let active = false;     // true while Kel is in listening mode
+    let busy = false;       // true while Kel is thinking or speaking
+    let rec = null;
+    let voices = [];
+
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+
+    function add(cls, text) {
+      const p = document.createElement('p');
+      p.className = cls; p.textContent = text;
+      log.appendChild(p); log.scrollTop = log.scrollHeight;
+    }
+
+    // Voice: prefer a male-sounding English voice, and remember the user's choice.
+    const MALE_HINTS = ['male', 'david', 'mark', 'george', 'daniel', 'james', 'guy', 'ryan', 'alex', 'fred', 'arthur', 'thomas', 'google uk english male'];
+    function loadVoices() {
+      voices = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith('en'));
+      if (!voices.length) voices = speechSynthesis.getVoices();
+      voiceSel.innerHTML = '';
+      voices.forEach((v, i) => {
+        const o = document.createElement('option');
+        o.value = i; o.textContent = v.name + ' (' + v.lang + ')';
+        voiceSel.appendChild(o);
+      });
+      const saved = localStorage.getItem('kelVoice');
+      let idx = voices.findIndex(v => v.name === saved);
+      if (idx < 0) idx = voices.findIndex(v => MALE_HINTS.some(h => v.name.toLowerCase().includes(h)));
+      if (idx < 0) idx = 0;
+      voiceSel.value = String(idx);
+    }
+    loadVoices();
+    speechSynthesis.onvoiceschanged = loadVoices;
+    voiceSel.addEventListener('change', () => {
+      const v = voices[Number(voiceSel.value)];
+      if (v) localStorage.setItem('kelVoice', v.name);
+      speak('This is my new voice.');
+    });
+
+    function speak(text, done) {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const v = voices[Number(voiceSel.value)];
+      if (v) u.voice = v;
+      u.pitch = 0.9;
+      u.onend = () => { if (done) done(); };
+      u.onerror = () => { if (done) done(); };
+      statusEl.textContent = 'Speaking';
+      speechSynthesis.speak(u);
+    }
+
+    function resumeListening() {
+      busy = false;
+      if (active && rec) {
+        statusEl.textContent = 'Listening';
+        try { rec.start(); } catch (e) {}
+      } else {
+        statusEl.textContent = 'Ready';
+      }
+    }
+
+    async function ask(message) {
+      busy = true;
+      statusEl.textContent = 'Thinking';
+      try {
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message })
+        });
+        const data = await res.json();
+        const reply = data.reply || data.error || 'No answer.';
+        add('kel', reply);
+        speak(reply, resumeListening);
+      } catch (e) {
+        add('kel', 'I could not reach the server.');
+        resumeListening();
+      }
+    }
+
+    // Typing box
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const said = input.value.trim();
+      if (!said || busy) return;
+      input.value = '';
+      add('you', said);
+      if (rec) { try { rec.stop(); } catch (e) {} }
+      ask(said);
+    });
+
+    // Voice
+    if (!Rec) {
+      btn.disabled = true;
+      statusEl.textContent = 'Voice needs Chrome. You can still type.';
+    } else {
+      rec = new Rec();
+      rec.lang = 'en-US';
+      rec.interimResults = false;
+      rec.continuous = false;
+      rec.onresult = (e) => {
+        const said = e.results[0][0].transcript;
+        add('you', said);
+        ask(said);
+      };
+      rec.onerror = (e) => {
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+          active = false;
+          btn.classList.remove('on'); btn.textContent = 'Tap to start';
+          statusEl.textContent = 'Allow the microphone, then tap again.';
+        }
+      };
+      rec.onend = () => {
+        // keep listening between answers while active and Kel is not busy
+        if (active && !busy) { try { rec.start(); } catch (e) {} }
+      };
+      btn.addEventListener('click', () => {
+        if (!active) {
+          active = true;
+          btn.classList.add('on'); btn.textContent = 'Tap to stop';
+          statusEl.textContent = 'Listening';
+          try { rec.start(); } catch (e) {}
+        } else {
+          active = false;
+          speechSynthesis.cancel();
+          try { rec.stop(); } catch (e) {}
+          btn.classList.remove('on'); btn.textContent = 'Tap to start';
+          statusEl.textContent = 'Stopped';
+          busy = false;
+        }
+      });
+    }
+  </script>
+</body>
+</html>
